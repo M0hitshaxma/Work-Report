@@ -1,2 +1,230 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mohit's Workbook</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        /* --- General Styles --- */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #f5f5f0;
+            background-image: repeating-linear-gradient(transparent, transparent 30px, #e0e0e0 30px, #e0e0e0 31px);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        /* --- Header & Buttons --- */
+        .header { text-align: center; margin-bottom: 40px; padding: 20px; background: white; border: 2px solid #000; box-shadow: 5px 5px 0 #000; }
+        .header h1 { font-size: 2em; color: #000; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; }
+        
+        .add-work-btn {
+            position: fixed; top: 20px; right: 20px; z-index: 1000;
+            background: #000; color: #fff; border: none; padding: 12px 24px; font-size: 0.9em; font-weight: bold; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+            box-shadow: 3px 3px 0 #666; transition: all 0.2s; font-family: 'Courier New', monospace;
+        }
+        .add-work-btn:hover { background: #333; transform: translate(-2px, -2px); box-shadow: 5px 5px 0 #666; }
+        #fileInput { display: none; }
+
+        /* --- Dashboard --- */
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 30px; margin-bottom: 30px; }
+        .stat-card { background: white; border: 2px solid #000; padding: 25px; box-shadow: 5px 5px 0 #000; }
+        .stat-card h3 { font-size: 1em; text-transform: uppercase; color: #666; margin-bottom: 15px; }
+        .stat-card .value { font-size: 2.5em; font-weight: bold; color: #000; }
+
+        /* --- Sheet Selector & Table --- */
+        .sheet-selector, .table-container, .loading, .welcome-message { background: white; border: 2px solid #000; padding: 20px; margin-bottom: 30px; box-shadow: 5px 5px 0 #000; }
+        .sheet-tabs { display: flex; gap: 10px; flex-wrap: wrap; }
+        .sheet-tab { padding: 10px 20px; border: 2px solid #000; cursor: pointer; transition: all 0.2s; font-weight: bold; }
+        .sheet-tab.active { background: #000; color: white; }
+        .table-container { padding: 30px; overflow-x: auto; }
+        .file-info { margin-bottom: 25px; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #000; padding: 10px; text-align: left; font-size: 0.9em; }
+        th { background: #000; color: white; position: sticky; top: 0; }
+        tr:nth-child(even) { background-color: #f5f5f5; }
+
+        /* --- Utility & Messages --- */
+        .loading, .welcome-message { text-align: center; padding: 60px 20px; }
+        .loading { display: none; }
+    </style>
+</head>
+<body>
+    <button class="add-work-btn" onclick="showMenu()">+ Add Work</button>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+
+    <div class="container">
+        <div class="header"><h1>📓 Mohit's Workbook</h1></div>
+        <div class="loading" id="loading">Loading your work...</div>
+        
+        <div class="dashboard" id="dashboard">
+            <div class="stat-card"><h3>Total Work Days</h3><div class="value" id="daysValue">0</div></div>
+            <div class="stat-card"><h3>Total Hours Worked</h3><div class="value" id="hoursValue">0.00</div></div>
+            <div class="stat-card"><h3>Average Hours / Day</h3><div class="value" id="avgValue">0.00</div></div>
+        </div>
+
+        <div class="welcome-message" id="welcomeMessage"><h2>Welcome to Mohit's Workbook</h2></div>
+        <div class="sheet-selector" id="sheetSelector" style="display: none;"><h3 style="margin-bottom: 15px;">Select Sheet:</h3><div class="sheet-tabs" id="sheetTabs"></div></div>
+        <div class="table-container" id="tableContainer" style="display: none;"><div class="file-info" id="fileName"></div><div id="tableContent"></div></div>
+    </div>
+
+    <script>
+        // --- GLOBAL DOM ELEMENTS ---
+        const daysValueEl = document.getElementById('daysValue');
+        const hoursValueEl = document.getElementById('hoursValue');
+        const avgValueEl = document.getElementById('avgValue');
+        const fileInput = document.getElementById('fileInput');
+        const loading = document.getElementById('loading');
+        const sheetSelector = document.getElementById('sheetSelector');
+        const tableContainer = document.getElementById('tableContainer');
+        const welcomeMessage = document.getElementById('welcomeMessage');
+        let workbook = null;
+        let currentFileName = '';
+
+        // --- MENU & MAIN ACTIONS ---
+        function showMenu() {
+            const choice = prompt("Choose an action:\n\n1. Update Stats\n2. Upload Work\n3. Clear Uploaded File");
+            switch (choice) {
+                case '1': updateStats(); break;
+                case '2': checkPasswordForFileUpload(); break;
+                case '3': clearExcelFile(); break;
+                default: break;
+            }
+        }
+
+        // --- DASHBOARD LOGIC ---
+        function animateValue(element, start, end, duration, decimals = 0) {
+            let startTimestamp = null;
+            const step = timestamp => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                const value = progress * (end - start) + start;
+                element.textContent = value.toFixed(decimals);
+                if (progress < 1) window.requestAnimationFrame(step);
+            };
+            window.requestAnimationFrame(step);
+        }
+
+        function renderDashboard() {
+            const totalDays = parseFloat(localStorage.getItem('totalDays')) || 0;
+            const totalHours = parseFloat(localStorage.getItem('totalHours')) || 0;
+            const avgHours = totalDays > 0 ? totalHours / totalDays : 0;
+            animateValue(daysValueEl, 0, totalDays, 1000, 0);
+            animateValue(hoursValueEl, 0, totalHours, 1000, 2);
+            animateValue(avgValueEl, 0, avgHours, 1000, 2);
+        }
+
+        function updateStats() {
+            const password = prompt("Enter password to update stats:");
+            if (password === '9828') {
+                const totalDaysInput = prompt("Enter Total Work Days:", localStorage.getItem('totalDays') || 0);
+                const totalHoursInput = prompt("Enter Total Hours Worked:", localStorage.getItem('totalHours') || 0);
+                const totalDays = parseFloat(totalDaysInput);
+                const totalHours = parseFloat(totalHoursInput);
+                if (!isNaN(totalDays) && !isNaN(totalHours)) {
+                    localStorage.setItem('totalDays', totalDays);
+                    localStorage.setItem('totalHours', totalHours);
+                    renderDashboard();
+                } else { alert("Invalid input. Please enter numbers only."); }
+            } else if (password !== null) { alert("Incorrect password!"); }
+        }
+
+        // --- EXCEL VIEWER LOGIC ---
+        function checkPasswordForFileUpload() {
+            const password = prompt('Enter password to add work:');
+            if (password === '9828405021') { fileInput.click(); } 
+            else if (password !== null) { alert('Incorrect password!'); }
+        }
+
+        fileInput.addEventListener('change', e => e.target.files.length > 0 && handleFile(e.target.files[0]));
+
+        function handleFile(file) {
+            welcomeMessage.style.display = 'none';
+            tableContainer.style.display = 'none';
+            sheetSelector.style.display = 'none';
+            loading.style.display = 'block';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                // Save file data to localStorage for persistence
+                const base64Data = btoa(String.fromCharCode.apply(null, data));
+                localStorage.setItem('excelFileData', base64Data);
+                localStorage.setItem('excelFileName', file.name);
+                processWorkbookData(data, file.name);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+        
+        function processWorkbookData(data, fileName) {
+            try {
+                currentFileName = fileName;
+                workbook = XLSX.read(data, { type: 'array' });
+                loading.style.display = 'none';
+                welcomeMessage.style.display = 'none';
+                if (workbook.SheetNames.length > 1) { showSheetSelector(); } 
+                else { displaySheet(workbook.SheetNames[0]); }
+            } catch (error) {
+                alert('Error reading file: ' + error.message);
+                clearExcelFile();
+            }
+        }
+
+        function showSheetSelector() {
+            const sheetTabs = document.getElementById('sheetTabs');
+            sheetTabs.innerHTML = '';
+            workbook.SheetNames.forEach(sheetName => {
+                const tab = document.createElement('div');
+                tab.className = 'sheet-tab';
+                tab.textContent = sheetName;
+                tab.onclick = () => {
+                    document.querySelectorAll('.sheet-tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    displaySheet(sheetName);
+                };
+                sheetTabs.appendChild(tab);
+            });
+            sheetSelector.style.display = 'block';
+            sheetTabs.firstChild.classList.add('active');
+            displaySheet(workbook.SheetNames[0]);
+        }
+
+        function displaySheet(sheetName) {
+            const worksheet = workbook.Sheets[sheetName];
+            const html = XLSX.utils.sheet_to_html(worksheet);
+            document.getElementById('fileName').textContent = `File: ${currentFileName} | Sheet: ${sheetName}`;
+            document.getElementById('tableContent').innerHTML = html;
+            tableContainer.style.display = 'block';
+            sheetSelector.style.display = workbook.SheetNames.length > 1 ? 'block' : 'none';
+        }
+
+        function clearExcelFile() {
+            localStorage.removeItem('excelFileData');
+            localStorage.removeItem('excelFileName');
+            tableContainer.style.display = 'none';
+            sheetSelector.style.display = 'none';
+            loading.style.display = 'none';
+            welcomeMessage.style.display = 'block';
+        }
+
+        // --- INITIAL PAGE LOAD ---
+        window.onload = function() {
+            // 1. Render dashboard stats
+            renderDashboard();
+
+            // 2. Check for and render a saved Excel file
+            const savedFileData = localStorage.getItem('excelFileData');
+            const savedFileName = localStorage.getItem('excelFileName');
+            if (savedFileData && savedFileName) {
+                const data = Uint8Array.from(atob(savedFileData), c => c.charCodeAt(0));
+                processWorkbookData(data, savedFileName);
+            }
+        };
+    </script>
+</body>
+</html>
